@@ -253,7 +253,6 @@ def get_latest_revision_number(token, site_id, workbook_id):
     latest = max(revisions, key=lambda r: int(r["number"]))
     return latest["number"], latest
 
-
 def get_project_permissions(token, site_id, project_id):
     url = f"{TABLEAU_SITE_URL}/api/3.21/sites/{site_id}/projects/{project_id}/permissions"
     r = requests.get(

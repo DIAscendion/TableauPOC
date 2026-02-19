@@ -5,6 +5,32 @@ import requests
 import urllib3
 from pathlib import Path
 
+# import core comparison helpers from the CLI module
+from tableau_comparator import (
+    sign_in as _placeholder_signin,  # avoid accidental use
+    get_workbook_id_in_project,
+    get_revisions,
+    get_workbook_owner,
+    get_latest_revision_info,
+    download_rev,
+    parse_twb,
+    extract_sections,
+    build_cards,
+    populate_change_registry_from_cards,
+    build_overall_workbook_summary_card,
+    build_users_permissions_card_with_context,
+    ensure_change_registry_keys,
+    CHANGE_REGISTRY,
+    build_workbook_kpi_snapshot,
+    render_workbook_kpi_table,
+    render_visual_change_tree,
+    xmldiff_text,
+    sanitize_name,
+    write_text,
+    generate_html_report,
+    get_users_and_permissions_for_workbook,
+)
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 VERIFY_SSL = False
 
@@ -94,6 +120,149 @@ def get_workbook_revisions(site_url, site_id, token, workbook_id):
     except Exception as e:
         st.error(f"Failed to get revisions: {str(e)}")
         return []
+
+
+# --------------------------------------------------------------------------
+# comparison orchestration for the Streamlit UI
+# --------------------------------------------------------------------------
+def perform_comparison(
+    source_project,
+    source_workbook,
+    target_project,
+    target_workbook,
+    source_revision_number,
+    target_revision_number,
+):
+    """Run the full comparator logic and return path to generated HTML report.
+
+    Arguments are all strings (revision numbers may be numeric strings).
+    """
+    token = st.session_state.get("auth_token")
+    site_id = st.session_state.get("site_id")
+    site_url = st.session_state.get("site_url")
+
+    if not token or not site_id or not site_url:
+        st.error("Authentication state lost. Please reconnect.")
+        return None
+
+    # look up workbook ids
+    try:
+        source_wid, source_project_id = get_workbook_id_in_project(
+            token, site_id, source_project, source_workbook
+        )
+        target_wid, target_project_id = get_workbook_id_in_project(
+            token, site_id, target_project, target_workbook
+        )
+    except Exception as e:
+        st.error(f"Lookup failed: {str(e)}")
+        return None
+
+    st.write(f"🔎 Source workbook ID: {source_wid}")
+    st.write(f"🔎 Target workbook ID: {target_wid}")
+
+    # download the specific revisions
+    twb_old = download_rev(token, site_id, source_wid, source_revision_number, force=False)
+    twb_new = download_rev(token, site_id, target_wid, target_revision_number, force=False)
+
+    root_old = parse_twb(twb_old)
+    root_new = parse_twb(twb_new)
+    if root_old is None or root_new is None:
+        st.error("Unable to parse downloaded workbook(s).")
+        return None
+
+    sec_old = extract_sections(root_old)
+    sec_new = extract_sections(root_new)
+
+    cards = build_cards(sec_old, sec_new)
+    populate_change_registry_from_cards(cards)
+
+    overall_summary_card = build_overall_workbook_summary_card(
+        sec_old, sec_new, cards, root_old, root_new
+    )
+    if overall_summary_card:
+        cards.insert(0, overall_summary_card)
+
+    # permissions
+    source_permissions = get_users_and_permissions_for_workbook(
+        token, site_id, source_project, source_workbook
+    )
+    target_permissions = get_users_and_permissions_for_workbook(
+        token, site_id, target_project, target_workbook
+    )
+
+    users_permissions_html = (
+        build_users_permissions_card_with_context(
+            source_project,
+            source_workbook,
+            source_permissions,
+            context="source",
+        )
+        + "<hr/>"
+        + build_users_permissions_card_with_context(
+            target_project,
+            target_workbook,
+            target_permissions,
+            context="target",
+        )
+    )
+
+    # structural diff
+    structural = xmldiff_text(
+        ET.tostring(root_old, encoding="unicode"),
+        ET.tostring(root_new, encoding="unicode"),
+    )
+    safe_wb = sanitize_name(f"{source_workbook}_VS_{target_workbook}")
+    struct_path = f"{safe_wb}_STRUCT.txt"
+    write_text(struct_path, structural)
+
+    # kpis + visual tree
+    kpi_old = build_workbook_kpi_snapshot(sec_old)
+    kpi_new = build_workbook_kpi_snapshot(sec_new)
+    kpi_html = render_workbook_kpi_table(kpi_old, kpi_new)
+    visual_tree_text = render_visual_change_tree(sec_new, CHANGE_REGISTRY, target_workbook)
+
+    # revision metadata
+    source_owner = get_workbook_owner(token, site_id, source_wid)
+    target_owner = get_workbook_owner(token, site_id, target_wid)
+    source_revs = get_revisions(token, site_id, source_wid)
+    target_revs = get_revisions(token, site_id, target_wid)
+    source_latest = get_latest_revision_info(source_revs, source_owner)
+    target_latest = get_latest_revision_info(target_revs, target_owner)
+
+    OLD_PUBLISHER = source_latest.get("publisher")
+    NEW_PUBLISHER = target_latest.get("publisher")
+    LATEST_PUBLISHER = NEW_PUBLISHER
+    LATEST_REVISION = target_revision_number
+    LATEST_PUBLISHED_AT = target_latest.get("publishedAt", "")
+
+    # generate HTML report
+    report_name = sanitize_name(
+        f"{source_workbook}_v{source_revision_number}_vs_{target_workbook}_v{target_revision_number}.html"
+    )
+    out_file = report_name
+    generate_html_report(
+        f"{source_workbook} v{source_revision_number}",
+        f"{target_workbook} v{target_revision_number}",
+        cards,
+        None,
+        out_file,
+        kpi_html,
+        root_new,
+        visual_tree_text,
+        LATEST_PUBLISHER,
+        LATEST_REVISION,
+        LATEST_PUBLISHED_AT,
+        OLD_PUBLISHER,
+        NEW_PUBLISHER,
+        users_permissions_html,
+    )
+
+    return out_file
+
+
+# ============================================================================
+# UI INITIALIZATION & STATE MANAGEMENT
+# ============================================================================
 
 # ============================================================================
 # UI INITIALIZATION & STATE MANAGEMENT
@@ -310,8 +479,41 @@ if st.session_state.authenticated:
     
     with col_btn[1]:
         if st.button("🚀 Compare Workbooks", use_container_width=True, type="primary"):
-            st.info("📊 Comparison feature coming soon! Integration with your main comparison engine in progress...")
-            # TODO: Integrate with your dev_2_prod 3.py comparison logic here
+            # determine revision numbers from the selections (they're stored earlier in the UI)
+            try:
+                source_rev_num = revisions_source[
+                    revision_options_source.index(selected_revision_source)
+                ]["number"]
+                target_rev_num = revisions_target[
+                    revision_options_target.index(selected_revision_target)
+                ]["number"]
+            except Exception:
+                st.error("Unable to determine selected revision numbers.")
+                source_rev_num = None
+                target_rev_num = None
+
+            if not source_rev_num or not target_rev_num:
+                st.warning("Please make sure both revisions are selected.")
+            else:
+                with st.spinner("Running comparison… this may take a minute"):
+                    report_path = perform_comparison(
+                        selected_project_source,
+                        selected_workbook_source,
+                        selected_project_target,
+                        selected_workbook_target,
+                        source_rev_num,
+                        target_rev_num,
+                    )
+                if report_path:
+                    st.success(f"✅ Comparison complete, report saved to `{report_path}`")
+                    # display the generated HTML
+                    try:
+                        with open(report_path, "r", encoding="utf-8") as f:
+                            html_content = f.read()
+                        st.components.v1.html(html_content, height=800, scrolling=True)
+                    except Exception as e:
+                        st.error(f"Failed to render report: {e}")
+        
 
 else:
     # Not authenticated

@@ -61,6 +61,7 @@ def sign_in_with_params(site_url, site_content_url, token_name, token_secret):
         st.error(f"Sign-in failed: {str(e)}")
         return None, None
 
+@st.cache_data(show_spinner="Fetching projects...")
 def list_projects(site_url, site_id, token):
     """List all projects."""
     try:
@@ -94,10 +95,12 @@ def list_projects(site_url, site_id, token):
         st.error(f"Failed to list projects: {str(e)}")
         return []
 
+@st.cache_data(show_spinner="Fetching workbooks...")
 def list_workbooks_in_project(site_url, site_id, token, project_id):
     """List all workbooks in a project."""
     try:
-        url = f"{site_url}/api/3.25/sites/{site_id}/projects/{project_id}/workbooks"
+        # Correct way to filter workbooks by project in the REST API
+        url = f"{site_url}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
         r = requests.get(url, headers={"X-Tableau-Auth": token}, verify=VERIFY_SSL, timeout=60)
         r.raise_for_status()
         root = ET.fromstring(r.text)

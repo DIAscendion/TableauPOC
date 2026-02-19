@@ -64,8 +64,22 @@ def sign_in_with_params(site_url, site_content_url, token_name, token_secret):
 def list_projects(site_url, site_id, token):
     """List all projects."""
     try:
-        url = f"{site_url}/api/3.25/sites/{site_id}/projects"
-        r = requests.get(url, headers={"X-Tableau-Auth": token}, verify=VERIFY_SSL, timeout=60)
+        # Ensure site_url doesn't have a trailing slash
+        base_url = site_url.rstrip('/')
+        url = f"{base_url}/api/3.25/sites/{site_id}/projects"
+        
+        headers = {
+            "X-Tableau-Auth": token,
+            "Accept": "application/json"
+        }
+        
+        r = requests.get(url, headers=headers, verify=VERIFY_SSL, timeout=60)
+        
+        if r.status_code == 401:
+             st.error("Session expired. Please reconnect in the sidebar.")
+             st.session_state.authenticated = False
+             return []
+             
         r.raise_for_status()
         root = ET.fromstring(r.text)
         ns = {"t": "http://tableau.com/api"}

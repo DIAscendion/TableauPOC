@@ -61,13 +61,11 @@ def sign_in_with_params(site_url, site_content_url, token_name, token_secret):
         st.error(f"Sign-in failed: {str(e)}")
         return None, None
 
-@st.cache_data(show_spinner="Fetching projects...")
+@st.cache_data(show_spinner="Refreshing projects...", ttl=600) # Cache for 10 minutes
 def list_projects(site_url, site_id, token):
-    """List all projects."""
     try:
-        # Ensure site_url doesn't have a trailing slash
         base_url = site_url.rstrip('/')
-        url = f"{base_url}/api/3.25/sites/{site_id}/projects"
+        url = f"{base_url}/api/3.25/sites/{site_id}/projects?pageSize=1000"
         
         headers = {
             "X-Tableau-Auth": token,
@@ -77,30 +75,31 @@ def list_projects(site_url, site_id, token):
         r = requests.get(url, headers=headers, verify=VERIFY_SSL, timeout=60)
         
         if r.status_code == 401:
-             st.error("Session expired. Please reconnect in the sidebar.")
-             st.session_state.authenticated = False
-             return []
-             
+            # This is the "Unauthorized" flag
+            return "AUTH_EXPIRED"
+            
         r.raise_for_status()
         root = ET.fromstring(r.text)
         ns = {"t": "http://tableau.com/api"}
+        
         projects = []
         for proj in root.findall(".//t:project", ns):
             projects.append({
                 "id": proj.attrib.get("id"),
                 "name": proj.attrib.get("name")
             })
-        return projects
+        return sorted(projects, key=lambda x: x['name'])
     except Exception as e:
-        st.error(f"Failed to list projects: {str(e)}")
+        st.error(f"Project Fetch Error: {str(e)}")
         return []
-
+    
 @st.cache_data(show_spinner="Fetching workbooks...")
 def list_workbooks_in_project(site_url, site_id, token, project_id):
     """List all workbooks in a project."""
     try:
+        base_url = site_url.rstrip('/')
         # Correct way to filter workbooks by project in the REST API
-        url = f"{site_url}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
+        url = f"{base_url}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
         r = requests.get(url, headers={"X-Tableau-Auth": token}, verify=VERIFY_SSL, timeout=60)
         r.raise_for_status()
         root = ET.fromstring(r.text)
@@ -347,121 +346,76 @@ with st.sidebar:
 # ============================================================================
 
 if st.session_state.authenticated:
+    # 1. FETCH PROJECTS FIRST & VALIDATE SESSION
+    projects = list_projects(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token)
     
-    # Create two columns for Source and Target workbooks
+    # Check if the token was rejected by Tableau
+    if projects == "AUTH_EXPIRED":
+        st.session_state.authenticated = False
+        st.session_state.auth_token = None
+        st.sidebar.error("⚠️ Session Expired. Please click 'Connect' again.")
+        st.rerun() # Forces the UI to show the login warning immediately
+    
+    if not projects:
+        st.warning("No projects available. Check your access permissions.")
+        st.stop()
+
+    # 2. PROCEED WITH UI LAYOUT IF SESSION IS VALID
+    project_names = [p["name"] for p in projects]
     col1, col2 = st.columns(2)
     
     # ========== SOURCE WORKBOOK (LEFT COLUMN) ==========
     with col1:
         st.subheader("📘 Source Workbook")
+        selected_project_source = st.selectbox(
+            "Select Source Project",
+            options=project_names,
+            key="source_project"
+        )
         
-        # Project Selection
-        projects = list_projects(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token)
-        project_names = [p["name"] for p in projects]
+        source_project_id = next((p["id"] for p in projects if p["name"] == selected_project_source), None)
         
-        if not projects:
-            st.warning("No projects available. Check your access permissions.")
-        else:
-            selected_project_source = st.selectbox(
-                "Select Source Project",
-                options=project_names,
-                key="source_project"
+        if source_project_id:
+            workbooks_source = list_workbooks_in_project(
+                st.session_state.site_url,
+                st.session_state.site_id,
+                st.session_state.auth_token,
+                source_project_id
             )
             
-            # Get project ID
-            source_project_id = next((p["id"] for p in projects if p["name"] == selected_project_source), None)
-            
-            if source_project_id:
-                # Workbook Selection
-                workbooks_source = list_workbooks_in_project(
-                    st.session_state.site_url,
-                    st.session_state.site_id,
-                    st.session_state.auth_token,
-                    source_project_id
-                )
-                
-                workbook_names_source = [wb["name"] for wb in workbooks_source]
-                
-                if workbooks_source:
-                    selected_workbook_source = st.selectbox(
-                        "Select Source Workbook",
-                        options=workbook_names_source,
-                        key="source_workbook"
-                    )
-                    
-                    # Get workbook ID
-                    source_workbook_id = next((wb["id"] for wb in workbooks_source if wb["name"] == selected_workbook_source), None)
-                    
-                    if source_workbook_id:
-                        # Revision Selection
-                        st.write("**Select Revision:**")
-                        revisions_source = get_workbook_revisions(
-                            st.session_state.site_url,
-                            st.session_state.site_id,
-                            st.session_state.auth_token,
-                            source_workbook_id
-                        )
-                        
-                        if revisions_source:
-                            revision_options_source = [
-                                f"v{rev['number']} - {rev['publishedAt']} (by {rev['publisher']})"
-                                for rev in revisions_source
-                            ]
-                            selected_revision_source = st.selectbox(
-                                "Choose revision",
-                                options=revision_options_source,
-                                key="source_revision"
-                            )
-                            
-                            # Extract revision number
-                            source_rev_num = revision_options_source.index(selected_revision_source)
-                            st.info(f"✅ Source: **{selected_workbook_source}** - v{revisions_source[source_rev_num]['number']}")
-                        else:
-                            st.warning("No revisions found for this workbook.")
-                else:
-                    st.warning("No workbooks in this project.")
-    
+            # ... (the rest of your workbook and revision logic for col1) ...
+
     # ========== TARGET WORKBOOK (RIGHT COLUMN) ==========
     with col2:
         st.subheader("📗 Target Workbook")
+        selected_project_target = st.selectbox(
+            "Select Target Project",
+            options=project_names,
+            key="target_project"
+        )
         
-        projects = list_projects(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token)
-        project_names = [p["name"] for p in projects]
+        target_project_id = next((p["id"] for p in projects if p["name"] == selected_project_target), None)
         
-        if not projects:
-            st.warning("No projects available. Check your access permissions.")
-        else:
-            selected_project_target = st.selectbox(
-                "Select Target Project",
-                options=project_names,
-                key="target_project"
+        if target_project_id:
+            workbooks_target = list_workbooks_in_project(
+                st.session_state.site_url,
+                st.session_state.site_id,
+                st.session_state.auth_token,
+                target_project_id
             )
+            workbook_names_target = [wb["name"] for wb in workbooks_target]
             
-            # Get project ID
-            target_project_id = next((p["id"] for p in projects if p["name"] == selected_project_target), None)
-            
-            if target_project_id:
-                # Workbook Selection
-                workbooks_target = list_workbooks_in_project(
-                    st.session_state.site_url,
-                    st.session_state.site_id,
-                    st.session_state.auth_token,
-                    target_project_id
+            if workbooks_target:
+                selected_workbook_target = st.selectbox(
+                    "Select Target Workbook",
+                    options=workbook_names_target,
+                    key="target_workbook"
                 )
                 
-                workbook_names_target = [wb["name"] for wb in workbooks_target]
-                
-                if workbooks_target:
-                    selected_workbook_target = st.selectbox(
-                        "Select Target Workbook",
-                        options=workbook_names_target,
-                        key="target_workbook"
-                    )
+                # Get workbook ID
+                target_workbook_id = next((wb["id"] for wb in workbooks_target if wb["name"] == selected_workbook_target), None)
                     
-                    # Get workbook ID
-                    target_workbook_id = next((wb["id"] for wb in workbooks_target if wb["name"] == selected_workbook_target), None)
-                    
-                    if target_workbook_id:
+                if target_workbook_id:
                         # Revision Selection
                         st.write("**Select Revision:**")
                         revisions_target = get_workbook_revisions(

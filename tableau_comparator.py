@@ -47,19 +47,30 @@ client = OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client(verify=False))
 OPENAI_AVAILABLE = True
 
 # ----------- Tableau REST helpers -----------
-def sign_in():
-    url = f"{TABLEAU_SITE_URL}/api/3.25/auth/signin"
+# ----------- Tableau REST helpers -----------
+def sign_in(server_url, site_id_content, token_name, token_secret):
+    """
+    Updated sign_in to accept credentials from the Streamlit UI.
+    """
+    # Build the URL using the input server_url
+    url = f"{server_url.rstrip('/')}/api/3.25/auth/signin"
+    
     payload = {"credentials":{
-        "personalAccessTokenName": TOKEN_NAME,
-        "personalAccessTokenSecret": TOKEN_SECRET,
-        "site": {"contentUrl": SITE_ID_CONTENT_URL}
+        "personalAccessTokenName": token_name,
+        "personalAccessTokenSecret": token_secret,
+        "site": {"contentUrl": site_id_content}
     }}
-    r = requests.post(url, json=payload, verify=VERIFY_SSL, timeout=60)
+    
+    # We use verify=False because the original script had VERIFY_SSL = False
+    r = requests.post(url, json=payload, verify=False, timeout=60)
     r.raise_for_status()
+    
     root = ET.fromstring(r.text)
     ns = {"t":"http://tableau.com/api"}
+    
     token = root.find(".//t:credentials", ns).attrib["token"]
     site_id = root.find(".//t:site", ns).attrib["id"]
+    
     print("✅ Signed in to Tableau Online.")
     return token, site_id
 

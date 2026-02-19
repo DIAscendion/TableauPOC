@@ -1,0 +1,7 @@
+streamlit
+requests
+lxml
+xmldiff
+openai
+httpx
+tableauserverclient

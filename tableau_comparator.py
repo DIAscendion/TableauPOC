@@ -27,8 +27,6 @@ from lxml import etree
 # from test_data import compare as datasource_compare
 # from test_data import CHANGE_REGISTRY as DS_CHANGE_REGISTRY
 # from test_data import extract_datasources_raw
-import tableau_comparator
-tableau_comparator.TABLEAU_SITE_URL = st.session_state.site_url.rstrip('/')
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 VERIFY_SSL = False

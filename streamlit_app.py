@@ -24,7 +24,7 @@ st.sidebar.header("Tableau Connectivity")
 
 # --- 1. Connection Section ---
 with st.sidebar:
-    server_url = st.text_input("Server URL", value="https://prod-useast-b.online.tableau.com")
+    server_url = st.text_input("Server URL", value="")
     site_id = st.text_input("Site ID (Content URL)", value="")
     token_name = st.text_input("Token Name")
     token_secret = st.text_input("Token Secret", type="password")

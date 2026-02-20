@@ -35,54 +35,68 @@ with st.sidebar:
             st.error(f"Connection failed: {e}")
 
 # Helper to fetch projects for the dropdown
+# --- HELPER FUNCTIONS ---
 def get_projects(token, site_id, server_url):
-    url = f"{server_url}/api/3.25/sites/{site_id}/projects"
-    headers = {"X-Tableau-Auth": token}
+    url = f"{server_url}/api/3.25/sites/{site_id}/projects?pageSize=1000"
+    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
     r = requests.get(url, headers=headers, verify=False)
-    r.raise_for_status()
+    if r.status_code != 200:
+        st.error(f"Failed to fetch projects. Status: {r.status_code}")
+        return {}
     root = ET.fromstring(r.text)
     ns = {"t": "http://tableau.com/api"}
     return {p.attrib['name']: p.attrib['id'] for p in root.findall(".//t:project", ns)}
 
-# Helper to fetch workbooks for a project
 def get_workbooks_in_project(token, site_id, server_url, project_id):
+    if not project_id:
+        return []
+    # Note: Tableau REST API filtering requires the exact project LUID
     url = f"{server_url}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
-    headers = {"X-Tableau-Auth": token}
+    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
     r = requests.get(url, headers=headers, verify=False)
-    r.raise_for_status()
+    if r.status_code != 200:
+        # If this fails, it's often a permissions issue on that specific project
+        return []
     root = ET.fromstring(r.text)
     ns = {"t": "http://tableau.com/api"}
     return [wb.attrib['name'] for wb in root.findall(".//t:workbook", ns)]
 
-# --- 2. Dynamic Selection Section ---
+# --- MAIN UI ---
 if 'tableau_token' in st.session_state:
     token = st.session_state['tableau_token']
     sid = st.session_state['tableau_site_id']
     srv = st.session_state['server_url']
 
-    # Refresh project list
-    try:
-        project_map = get_projects(token, sid, srv)
-        project_names = sorted(list(project_map.keys()))
-    except Exception as e:
-        st.error(f"Could not fetch projects: {e}")
-        project_names = []
+    # Load projects into session state to avoid repeated API calls
+    if 'project_map' not in st.session_state:
+        st.session_state.project_map = get_projects(token, sid, srv)
+    
+    project_names = sorted(list(st.session_state.project_map.keys()))
 
+    if not project_names:
+        st.error("No projects found. Please check your user permissions in Tableau.")
+        st.stop()
+
+    # Layout for Source and Target
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📘 Source Selection")
-        src_proj = st.selectbox("Source Project", project_names, key="src_p_sel")
-        if src_proj:
-            src_wb_list = get_workbooks_in_project(token, sid, srv, project_map[src_proj])
-            src_wb = st.selectbox("Source Workbook", sorted(src_wb_list), key="src_w_sel")
+        src_proj = st.selectbox("Select Project", project_names, key="src_p_sel")
+        src_proj_id = st.session_state.project_map.get(src_proj)
+        
+        # Dynamic Workbook Dropdown
+        src_wb_list = get_workbooks_in_project(token, sid, srv, src_proj_id)
+        src_wb = st.selectbox("Select Workbook", sorted(src_wb_list) if src_wb_list else ["No workbooks found"], key="src_w_sel")
         
     with col2:
         st.subheader("📗 Target Selection")
-        tgt_proj = st.selectbox("Target Project", project_names, key="tgt_p_sel")
-        if tgt_proj:
-            tgt_wb_list = get_workbooks_in_project(token, sid, srv, project_map[tgt_proj])
-            tgt_wb = st.selectbox("Target Workbook", sorted(tgt_wb_list), key="tgt_w_sel")
+        # Reuse the same project names
+        tgt_proj = st.selectbox("Select Project", project_names, key="tgt_p_sel")
+        tgt_proj_id = st.session_state.project_map.get(tgt_proj)
+        
+        tgt_wb_list = get_workbooks_in_project(token, sid, srv, tgt_proj_id)
+        tgt_wb = st.selectbox("Select Workbook", sorted(tgt_wb_list) if tgt_wb_list else ["No workbooks found"], key="tgt_w_sel")
 
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True):

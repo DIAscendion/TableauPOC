@@ -143,81 +143,92 @@ if 'tableau_token' in st.session_state:
 
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
-        if src_wb and tgt_wb:
-            with st.spinner("🕵️ Synchronizing XML Heuristics..."):
+        if src_wb and tgt_wb and src_wb != "No workbooks found":
+            with st.spinner("🕵️ Analyzing XML Heuristics & Permissions..."):
                 try:
+                    # 1. Environment Setup
                     tc.TABLEAU_SITE_URL = srv
                     report_file = "compare_SOURCE_vs_TARGET_latest.html"
                     
-                    # 1. DOWNLOAD & PARSE
+                    # 2. Download and Parse
                     src_data = tc.download_latest_workbook_revision(token, sid, src_proj, src_wb)
                     tgt_data = tc.download_latest_workbook_revision(token, sid, tgt_proj, tgt_wb)
+                    
                     root_old = tc.parse_twb(src_data['twb_path'])
                     root_new = tc.parse_twb(tgt_data['twb_path'])
 
-                    # 2. RUN ANALYSIS
+                    # 3. Fetch Missing Metadata (Emails & Permissions)
+                    src_owner = tc.get_workbook_owner(token, sid, src_data.get('workbook_id'))
+                    tgt_owner = tc.get_workbook_owner(token, sid, tgt_data.get('workbook_id'))
+                    
+                    src_perms = tc.get_users_and_permissions_for_workbook(token, sid, src_proj, src_wb)
+                    tgt_perms = tc.get_users_and_permissions_for_workbook(token, sid, tgt_proj, tgt_wb)
+
+                    # 4. Core Heuristics
                     sec_old = tc.extract_sections(root_old)
                     sec_new = tc.extract_sections(root_new)
                     
-                    # Reset Registry - CRITICAL for datasource filters to show up
+                    # Reset Global States inside the tool
                     tc.CHANGE_REGISTRY = {
                         "workbook": [], "datasources": {}, "calculations": {}, 
                         "parameters": {}, "worksheets": {}, "dashboards": {}, "stories": {}
                     }
-                    
-                    # 3. GENERATE CARDS
+                    # IMPORTANT: Clear the internal datasource summaries before building cards
+                    if hasattr(tc, 'DATASOURCE_CARDS'): tc.DATASOURCE_CARDS = [] 
+
+                    # 5. Build Content
                     cards = tc.build_cards(sec_old, sec_new)
                     tc.populate_change_registry_from_cards(cards)
-
-                    # 4. FETCH & BUILD PERMISSIONS (Manual Injection)
-                    src_perms = tc.get_users_and_permissions_for_workbook(token, sid, src_proj, src_wb)
-                    tgt_perms = tc.get_users_and_permissions_for_workbook(token, sid, tgt_proj, tgt_wb)
                     
-                    # Construct the specific Permissions Card your HTML expects
-                    perm_html = f"""
-                    <div style="display:flex; gap:20px;">
-                        <div style="flex:1;">{tc.build_users_permissions_card_with_context(src_proj, src_wb, src_perms, "source")}</div>
-                        <div style="flex:1;">{tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_perms, "target")}</div>
-                    </div>
-                    """
-                    cards.insert(0, {"section": "Users & Permissions", "status": "info", "html": perm_html})
+                    # Manual addition of Summary Card
+                    overall_summary = tc.build_overall_workbook_summary_card(sec_old, sec_new, cards, root_old, root_new)
+                    if overall_summary:
+                        cards.insert(0, overall_summary)
 
-                    # 5. FETCH PUBLISHER METADATA
-                    src_owner = tc.get_workbook_owner(token, sid, src_data.get('workbook_id'))
-                    tgt_owner = tc.get_workbook_owner(token, sid, tgt_data.get('workbook_id'))
-                    
-                    # 6. BUILD KPI & SUMMARY
+                    # 6. Generate HTML Components
                     kpi_old = tc.build_workbook_kpi_snapshot(sec_old)
                     kpi_new = tc.build_workbook_kpi_snapshot(sec_new)
                     kpi_html = tc.render_workbook_kpi_table(kpi_old, kpi_new)
                     
-                    # Inject Publisher Info into the Metadata string
-                    metadata_html = f"""
-                    <div class='meta'>
-                        <b>Source:</b> {src_wb} ({src_owner})<br/>
-                        <b>Target:</b> {tgt_wb} ({tgt_owner})<br/>
-                        <b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                    </div>
-                    """
-
-                    # 7. GENERATE THE REPORT
-                    # We pass the metadata_html into the 'gpt_summary' slot if your 
-                    # function signature allows it, or prepend it to kpi_html.
-                    tc.generate_html_report(
-                        src_wb, tgt_wb, cards, None, report_file, 
-                        metadata_html + kpi_html, root_new, 
-                        tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb)
+                    visual_tree = tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb)
+                    
+                    perm_html = (
+                        tc.build_users_permissions_card_with_context(src_proj, src_wb, src_perms, context="source")
+                        + "<hr/>" +
+                        tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_perms, context="Target")
                     )
 
-                    # 8. RENDER
+                    # 7. Call generate_html_report with EXACT positional arguments (15 total)
+                    # This matches your def generate_html_report(...) signature exactly
+                    tc.generate_html_report(
+                        src_wb,              # title_a
+                        tgt_wb,              # title_b
+                        cards,               # cards
+                        None,                # structural_ops
+                        report_file,         # out_file
+                        kpi_html,            # kpi_html
+                        root_new,            # root_new
+                        visual_tree,         # visual_tree_text
+                        tgt_owner,           # latest_publisher
+                        "Latest",            # latest_revision
+                        datetime.now().strftime("%Y-%m-%d"), # latest_published_at
+                        src_owner,           # old_publisher
+                        tgt_owner,           # new_publisher
+                        perm_html,           # users_permissions_html
+                        ""                   # site_users_html
+                    )
+
+                    # 8. Render in Streamlit
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
-                        st.success("✅ Comparison matching VS Code output!")
+                        st.success("✅ Comparison Complete")
                         components.html(html_content, height=1200, scrolling=True)
+                        st.download_button("📥 Download Full HTML", html_content, 
+                                         file_name=f"Diff_{tgt_wb}.html", mime="text/html")
                 
                 except Exception as e:
-                    st.error(f"Analysis Error: {e}")
+                    st.error(f"Error: {e}")
                     st.exception(e)
         else:
             st.warning("Please select both a source and target workbook.")

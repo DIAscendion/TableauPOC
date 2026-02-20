@@ -74,9 +74,13 @@ def get_projects(token, site_id, server_url):
 def get_workbooks_in_project(token, site_id, server_url, project_id):
     if not project_id:
         return []
-        
-    url = f"{server_url.rstrip('/')}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
-    headers = {"X-Tableau-Auth": token, "Accept": "application/xml"}
+    
+    # We fetch ALL workbooks for the site and filter locally to avoid API filter bugs
+    url = f"{server_url.rstrip('/')}/api/3.25/sites/{site_id}/workbooks?pageSize=1000"
+    headers = {
+        "X-Tableau-Auth": token,
+        "Accept": "application/xml"
+    }
     
     try:
         r = requests.get(url, headers=headers, verify=False, timeout=30)
@@ -85,8 +89,18 @@ def get_workbooks_in_project(token, site_id, server_url, project_id):
             
         root = ET.fromstring(r.content)
         ns = {"t": "http://tableau.com/api"}
-        return [wb.attrib['name'] for wb in root.findall(".//t:workbook", ns)]
-    except:
+        
+        # Find all workbooks where the parent project ID matches our selection
+        workbooks = []
+        for wb in root.findall(".//t:workbook", ns):
+            # Look for the project tag inside the workbook tag
+            proj_tag = wb.find("t:project", ns)
+            if proj_tag is not None and proj_tag.attrib.get('id') == project_id:
+                workbooks.append(wb.attrib.get('name'))
+        
+        return workbooks
+    except Exception as e:
+        st.error(f"Error fetching workbooks: {e}")
         return []
 
 # --- MAIN UI ---

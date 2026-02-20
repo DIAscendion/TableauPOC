@@ -144,89 +144,92 @@ if 'tableau_token' in st.session_state:
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
         if src_wb and tgt_wb and src_wb != "No workbooks found":
-            with st.spinner("🕵️ Deep-scanning workbooks and permissions..."):
+            with st.spinner("🕵️ Gathering full workbook metadata and permissions..."):
                 try:
                     tc.TABLEAU_SITE_URL = srv
                     report_file = "compare_SOURCE_vs_TARGET_latest.html"
                     
-                    # 1. DOWNLOAD WORKBOOKS
+                    # 1. DOWNLOAD & PARSE
                     src_data = tc.download_latest_workbook_revision(token, sid, src_proj, src_wb)
                     tgt_data = tc.download_latest_workbook_revision(token, sid, tgt_proj, tgt_wb)
                     
                     root_old = tc.parse_twb(src_data['twb_path'])
                     root_new = tc.parse_twb(tgt_data['twb_path'])
 
-                    # 2. FETCH MISSING METADATA (Permissions & Owners)
-                    # We use your tc helper functions to get the data missed in the previous run
+                    # 2. FETCH PERMISSIONS & OWNERS
+                    # We fetch these to inject them into the report manually
                     src_permissions = tc.get_users_and_permissions_for_workbook(token, sid, src_proj, src_wb)
                     tgt_permissions = tc.get_users_and_permissions_for_workbook(token, sid, tgt_proj, tgt_wb)
                     
+                    # Get Owner Emails (Publisher info)
                     src_owner = tc.get_workbook_owner(token, sid, src_data.get('workbook_id'))
                     tgt_owner = tc.get_workbook_owner(token, sid, tgt_data.get('workbook_id'))
 
-                    # 3. BUILD PERMISSIONS HTML BLOCK
-                    users_permissions_html = (
-                        tc.build_users_permissions_card_with_context(src_proj, src_wb, src_permissions, context="source")
-                        + "<hr/>" +
-                        tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_permissions, context="target")
-                    )
-
-                    # 4. RUN COMPARISON HEURISTICS
+                    # 3. RUN CORE ANALYSIS
                     sec_old = tc.extract_sections(root_old)
                     sec_new = tc.extract_sections(root_new)
                     
-                    # This ensures Datasource Filters and Parameters are detected
+                    # Build standard change cards
                     cards = tc.build_cards(sec_old, sec_new)
                     
+                    # Reset and populate Registry (Ensures Datasource Filters are caught)
                     tc.CHANGE_REGISTRY = {
                         "workbook": [], "datasources": {}, "calculations": {}, 
                         "parameters": {}, "worksheets": {}, "dashboards": {}, "stories": {}
                     }
                     tc.populate_change_registry_from_cards(cards)
-                    
-                    # Build Overall Summary
-                    overall_summary = tc.build_overall_workbook_summary_card(
-                        sec_old, sec_new, cards, root_old, root_new
-                    )
-                    if overall_summary:
-                        cards.insert(0, overall_summary)
 
-                    # 5. GENERATE KPIS & VISUAL TREE
+                    # 4. INJECT PERMISSIONS INTO CARDS
+                    # We create a custom "Permission Card" and put it at the top
+                    perm_html = (
+                        f"<h3>Source: {src_proj} / {src_wb}</h3>" +
+                        tc.build_users_permissions_card_with_context(src_proj, src_wb, src_permissions, "source") +
+                        "<br/><h3>Target: {tgt_proj} / {tgt_wb}</h3>" +
+                        tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_permissions, "target")
+                    )
+                    
+                    permission_card = {
+                        "section": "Users & Permissions",
+                        "status": "modified",
+                        "html": perm_html
+                    }
+                    cards.insert(0, permission_card)
+
+                    # 5. PREPARE KPI & VISUAL TREE
                     kpi_old = tc.build_workbook_kpi_snapshot(sec_old)
                     kpi_new = tc.build_workbook_kpi_snapshot(sec_new)
                     kpi_html = tc.render_workbook_kpi_table(kpi_old, kpi_new)
                     
+                    # Add Publisher Info to the KPI/Summary area
+                    publisher_info = f"<div style='margin-bottom:10px; color:#666;'><b>Source Publisher:</b> {src_owner} | <b>Target Publisher:</b> {tgt_owner}</div>"
+                    kpi_html = publisher_info + kpi_html
+
                     visual_tree_text = tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb)
 
-                    # 6. FINAL REPORT GENERATION (WITH ALL METADATA)
+                    # 6. GENERATE REPORT (Using original function signature)
+                    # We use positional arguments to match your script's exact requirements
                     tc.generate_html_report(
-                        f"{src_wb} (Source)",
-                        f"{tgt_wb} (Target)",
-                        cards,
-                        None, # GPT Analysis
-                        report_file,
-                        kpi_html,
-                        root_new,
-                        visual_tree_text,
-                        LATEST_PUBLISHER=tgt_owner,      # Added Missing Email
-                        LATEST_REVISION="Latest",
-                        LATEST_PUBLISHED_AT=datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        OLD_PUBLISHER=src_owner,         # Added Missing Email
-                        NEW_PUBLISHER=tgt_owner,         # Added Missing Email
-                        USERS_PERMISSIONS_HTML=users_permissions_html # Added Permissions
+                        f"{src_wb}",         # Source Name
+                        f"{tgt_wb}",         # Target Name
+                        cards,               # List of cards (now includes permissions)
+                        None,                # GPT Analysis
+                        report_file,         # Output path
+                        kpi_html,            # KPI table (now includes emails)
+                        root_new,            # New XML root
+                        visual_tree_text     # The visual change tree
                     )
 
-                    # 7. DISPLAY
+                    # 7. RENDER
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
-                        st.success("✅ Comparison successful with full metadata!")
+                        st.success("✅ Analysis Complete!")
                         components.html(html_content, height=1200, scrolling=True)
-                        st.download_button("📥 Download Full Report", html_content, 
-                                         file_name=f"Report_{tgt_wb}.html", mime="text/html")
+                        st.download_button("📥 Download Report", html_content, 
+                                         file_name=f"Tableau_Diff_{tgt_wb}.html", mime="text/html")
 
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Analysis failed: {e}")
                     st.exception(e)
         else:
             st.warning("Please select both a source and target workbook.")

@@ -10,12 +10,12 @@ import tableau_comparator as tc
 
 st.set_page_config(page_title="Tableau Workbook Comparator", layout="wide")
 
-st.title("📊 Tableau Workbook Comparator")
+st.title("📊 Visual Delta Tool - Tableau")
 
 # --- 1. Connection Section (Sidebar) ---
 with st.sidebar:
     st.header("🔐 Connection")
-    server_url = st.text_input("Server URL", value="https://prod-useast-b.online.tableau.com")
+    server_url = st.text_input("Server URL")
     site_id_input = st.text_input("Site Content URL (ID)", help="The part of the URL after /site/")
     token_name = st.text_input("PAT Name")
     token_secret = st.text_input("PAT Secret", type="password")

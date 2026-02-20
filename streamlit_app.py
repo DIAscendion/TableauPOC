@@ -346,146 +346,82 @@ with st.sidebar:
 # ============================================================================
 
 if st.session_state.authenticated:
-    # 1. FETCH PROJECTS FIRST & VALIDATE SESSION
+    # 1. FETCH PROJECTS & VALIDATE SESSION
     projects = list_projects(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token)
     
-    # Check if the token was rejected by Tableau
     if projects == "AUTH_EXPIRED":
         st.session_state.authenticated = False
-        st.session_state.auth_token = None
-        st.sidebar.error("⚠️ Session Expired. Please click 'Connect' again.")
-        st.rerun() # Forces the UI to show the login warning immediately
+        st.sidebar.error("⚠️ Session Expired. Please reconnect.")
+        st.rerun()
     
     if not projects:
-        st.warning("No projects available. Check your access permissions.")
+        st.warning("No projects available.")
         st.stop()
 
-    # 2. PROCEED WITH UI LAYOUT IF SESSION IS VALID
     project_names = [p["name"] for p in projects]
     col1, col2 = st.columns(2)
     
-    # ========== SOURCE WORKBOOK (LEFT COLUMN) ==========
+    # We initialize these as None so the button knows if selections are complete
+    source_rev_final = None
+    target_rev_final = None
+
+    # ========== SOURCE WORKBOOK (LEFT) ==========
     with col1:
         st.subheader("📘 Source Workbook")
-        selected_project_source = st.selectbox(
-            "Select Source Project",
-            options=project_names,
-            key="source_project"
-        )
+        sel_proj_src = st.selectbox("Select Project", options=project_names, key="src_proj_sel")
+        src_proj_id = next((p["id"] for p in projects if p["name"] == sel_proj_src), None)
         
-        source_project_id = next((p["id"] for p in projects if p["name"] == selected_project_source), None)
-        
-        if source_project_id:
-            workbooks_source = list_workbooks_in_project(
-                st.session_state.site_url,
-                st.session_state.site_id,
-                st.session_state.auth_token,
-                source_project_id
-            )
-            
-            # ... (the rest of your workbook and revision logic for col1) ...
+        if src_proj_id:
+            wbs_src = list_workbooks_in_project(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token, src_proj_id)
+            if wbs_src:
+                sel_wb_src = st.selectbox("Select Workbook", options=[w["name"] for w in wbs_src], key="src_wb_sel")
+                src_wb_id = next((w["id"] for w in wbs_src if w["name"] == sel_wb_src), None)
+                
+                revs_src = get_workbook_revisions(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token, src_wb_id)
+                if revs_src:
+                    rev_opts_src = [f"v{r['number']} - {r['publishedAt']} ({r['publisher']})" for r in revs_src]
+                    sel_rev_src = st.selectbox("Choose Revision", options=rev_opts_src, key="src_rev_sel")
+                    # Store the actual revision number
+                    source_rev_final = revs_src[rev_opts_src.index(sel_rev_src)]["number"]
+                else:
+                    st.warning("No revisions found.")
 
-    # ========== TARGET WORKBOOK (RIGHT COLUMN) ==========
+    # ========== TARGET WORKBOOK (RIGHT) ==========
     with col2:
         st.subheader("📗 Target Workbook")
-        selected_project_target = st.selectbox(
-            "Select Target Project",
-            options=project_names,
-            key="target_project"
-        )
+        sel_proj_tgt = st.selectbox("Select Project", options=project_names, key="tgt_proj_sel")
+        tgt_proj_id = next((p["id"] for p in projects if p["name"] == sel_proj_tgt), None)
         
-        target_project_id = next((p["id"] for p in projects if p["name"] == selected_project_target), None)
-        
-        if target_project_id:
-            workbooks_target = list_workbooks_in_project(
-                st.session_state.site_url,
-                st.session_state.site_id,
-                st.session_state.auth_token,
-                target_project_id
-            )
-            workbook_names_target = [wb["name"] for wb in workbooks_target]
-            
-            if workbooks_target:
-                selected_workbook_target = st.selectbox(
-                    "Select Target Workbook",
-                    options=workbook_names_target,
-                    key="target_workbook"
-                )
+        if tgt_proj_id:
+            wbs_tgt = list_workbooks_in_project(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token, tgt_proj_id)
+            if wbs_tgt:
+                sel_wb_tgt = st.selectbox("Select Workbook", options=[w["name"] for w in wbs_tgt], key="tgt_wb_sel")
+                tgt_wb_id = next((w["id"] for w in wbs_tgt if w["name"] == sel_wb_tgt), None)
                 
-                # Get workbook ID
-                target_workbook_id = next((wb["id"] for wb in workbooks_target if wb["name"] == selected_workbook_target), None)
-                    
-                if target_workbook_id:
-                        # Revision Selection
-                        st.write("**Select Revision:**")
-                        revisions_target = get_workbook_revisions(
-                            st.session_state.site_url,
-                            st.session_state.site_id,
-                            st.session_state.auth_token,
-                            target_workbook_id
-                        )
-                        
-                        if revisions_target:
-                            revision_options_target = [
-                                f"v{rev['number']} - {rev['publishedAt']} (by {rev['publisher']})"
-                                for rev in revisions_target
-                            ]
-                            selected_revision_target = st.selectbox(
-                                "Choose revision",
-                                options=revision_options_target,
-                                key="target_revision"
-                            )
-                            
-                            # Extract revision number
-                            target_rev_num = revision_options_target.index(selected_revision_target)
-                            st.info(f"✅ Target: **{selected_workbook_target}** - v{revisions_target[target_rev_num]['number']}")
-                        else:
-                            st.warning("No revisions found for this workbook.")
+                revs_tgt = get_workbook_revisions(st.session_state.site_url, st.session_state.site_id, st.session_state.auth_token, tgt_wb_id)
+                if revs_tgt:
+                    rev_opts_tgt = [f"v{r['number']} - {r['publishedAt']} ({r['publisher']})" for r in revs_tgt]
+                    sel_rev_tgt = st.selectbox("Choose Revision", options=rev_opts_tgt, key="tgt_rev_sel")
+                    target_rev_final = revs_tgt[rev_opts_tgt.index(sel_rev_tgt)]["number"]
                 else:
-                    st.warning("No workbooks in this project.")
-    
+                    st.warning("No revisions found.")
+
     # ========== COMPARE BUTTON ==========
     st.divider()
-    col_btn = st.columns([1, 3, 1])
-    
-    with col_btn[1]:
-        if st.button("🚀 Compare Workbooks", use_container_width=True, type="primary"):
-            # determine revision numbers from the selections (they're stored earlier in the UI)
-            try:
-                source_rev_num = revisions_source[
-                    revision_options_source.index(selected_revision_source)
-                ]["number"]
-                target_rev_num = revisions_target[
-                    revision_options_target.index(selected_revision_target)
-                ]["number"]
-            except Exception:
-                st.error("Unable to determine selected revision numbers.")
-                source_rev_num = None
-                target_rev_num = None
-
-            if not source_rev_num or not target_rev_num:
-                st.warning("Please make sure both revisions are selected.")
-            else:
-                with st.spinner("Running comparison… this may take a minute"):
-                    report_path = perform_comparison(
-                        selected_project_source,
-                        selected_workbook_source,
-                        selected_project_target,
-                        selected_workbook_target,
-                        source_rev_num,
-                        target_rev_num,
-                    )
+    if st.button("🚀 Compare Workbooks", use_container_width=True, type="primary"):
+        if not source_rev_final or not target_rev_final:
+            st.warning("Please ensure both workbooks and revisions are selected.")
+        else:
+            with st.spinner("Analyzing differences..."):
+                report_path = perform_comparison(
+                    sel_proj_src, sel_wb_src, 
+                    sel_proj_tgt, sel_wb_tgt, 
+                    source_rev_final, target_rev_final
+                )
                 if report_path:
-                    st.success(f"✅ Comparison complete, report saved to `{report_path}`")
-                    # display the generated HTML
-                    try:
-                        with open(report_path, "r", encoding="utf-8") as f:
-                            html_content = f.read()
-                        st.components.v1.html(html_content, height=800, scrolling=True)
-                    except Exception as e:
-                        st.error(f"Failed to render report: {e}")
-        
-
+                    st.success(f"Report Generated: {report_path}")
+                    with open(report_path, "r", encoding="utf-8") as f:
+                        st.components.v1.html(f.read(), height=900, scrolling=True)
 else:
     # Not authenticated
     st.warning("👆 Please enter your Tableau credentials in the sidebar to get started.")

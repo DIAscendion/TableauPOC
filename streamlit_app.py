@@ -37,29 +37,57 @@ with st.sidebar:
 # Helper to fetch projects for the dropdown
 # --- HELPER FUNCTIONS ---
 def get_projects(token, site_id, server_url):
-    url = f"{server_url}/api/3.25/sites/{site_id}/projects?pageSize=1000"
-    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
-    r = requests.get(url, headers=headers, verify=False)
-    if r.status_code != 200:
-        st.error(f"Failed to fetch projects. Status: {r.status_code}")
+    # Ensure URL is clean and headers are standard for Tableau Online
+    url = f"{server_url.rstrip('/')}/api/3.25/sites/{site_id}/projects?pageSize=1000"
+    headers = {
+        "X-Tableau-Auth": token,
+        "Accept": "application/xml" # Force XML to match your ET.fromstring logic
+    }
+    
+    try:
+        r = requests.get(url, headers=headers, verify=False, timeout=30)
+        
+        # Check if we got a valid response before parsing
+        if r.status_code != 200:
+            st.error(f"Tableau API Error ({r.status_code}): {r.text[:200]}")
+            return {}
+            
+        if not r.text.strip():
+            st.error("Tableau returned an empty response for projects.")
+            return {}
+
+        root = ET.fromstring(r.content) # Use .content (bytes) for better encoding handling
+        ns = {"t": "http://tableau.com/api"}
+        
+        projects = {p.attrib['name']: p.attrib['id'] for p in root.findall(".//t:project", ns)}
+        return projects
+
+    except ET.ParseError as e:
+        st.error("Failed to parse Tableau response. The server might be sending HTML instead of XML.")
+        with st.expander("Show raw response for debugging"):
+            st.code(r.text)
         return {}
-    root = ET.fromstring(r.text)
-    ns = {"t": "http://tableau.com/api"}
-    return {p.attrib['name']: p.attrib['id'] for p in root.findall(".//t:project", ns)}
+    except Exception as e:
+        st.error(f"Unexpected error fetching projects: {e}")
+        return {}
 
 def get_workbooks_in_project(token, site_id, server_url, project_id):
     if not project_id:
         return []
-    # Note: Tableau REST API filtering requires the exact project LUID
-    url = f"{server_url}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
-    headers = {"X-Tableau-Auth": token, "Accept": "application/json"}
-    r = requests.get(url, headers=headers, verify=False)
-    if r.status_code != 200:
-        # If this fails, it's often a permissions issue on that specific project
+        
+    url = f"{server_url.rstrip('/')}/api/3.25/sites/{site_id}/workbooks?filter=projectId:eq:{project_id}"
+    headers = {"X-Tableau-Auth": token, "Accept": "application/xml"}
+    
+    try:
+        r = requests.get(url, headers=headers, verify=False, timeout=30)
+        if r.status_code != 200:
+            return []
+            
+        root = ET.fromstring(r.content)
+        ns = {"t": "http://tableau.com/api"}
+        return [wb.attrib['name'] for wb in root.findall(".//t:workbook", ns)]
+    except:
         return []
-    root = ET.fromstring(r.text)
-    ns = {"t": "http://tableau.com/api"}
-    return [wb.attrib['name'] for wb in root.findall(".//t:workbook", ns)]
 
 # --- MAIN UI ---
 if 'tableau_token' in st.session_state:

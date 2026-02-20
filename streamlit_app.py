@@ -15,9 +15,9 @@ st.title("📊 Visual Delta Tool - Tableau")
 # --- 1. Connection Section (Sidebar) ---
 with st.sidebar:
     st.header("🔐 Connection")
-    server_url = st.text_input("Server URL")
+    server_url = st.text_input("Server URL", help="Your Tableau Server or Tableau Online URL (e.g., https://my-tableau-server.com or https://my-site.tableau.com)")
     site_id_input = st.text_input("Site Content URL (ID)", help="The part of the URL after /site/")
-    token_name = st.text_input("PAT Name")
+    token_name = st.text_input("PAT Name", help="The name of your Personal Access Token in Tableau")
     token_secret = st.text_input("PAT Secret", type="password")
     
     if st.button("Connect to Tableau"):

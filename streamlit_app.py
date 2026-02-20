@@ -143,52 +143,72 @@ if 'tableau_token' in st.session_state:
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
         if src_wb and tgt_wb and src_wb != "No workbooks found":
-            with st.spinner("Analyzing differences and generating report..."):
+            with st.spinner("Analyzing differences..."):
                 try:
-                    # 1. Sync the URL to the backend logic
+                    # 1. Sync the global URL variable in the tool
                     tc.TABLEAU_SITE_URL = srv
                     
-                    # 2. Run the download and comparison logic from your file
-                    # This triggers the full workflow: Download -> Parse -> Diff -> HTML Gen
+                    # 2. Download the data for both workbooks
+                    st.write("📥 Downloading workbooks...")
                     src_data = tc.download_latest_workbook_revision(token, sid, src_proj, src_wb)
                     tgt_data = tc.download_latest_workbook_revision(token, sid, tgt_proj, tgt_wb)
+
+                    # 3. Parse and run the comparison logic
+                    # We need to extract sections and generate the report manually
+                    # because tc.main() relies on command line arguments
+                    root_old = tc.parse_twb(src_data['twb_path'])
+                    root_new = tc.parse_twb(tgt_data['twb_path'])
                     
-                    # IMPORTANT: You must call the function in tc that actually triggers the 
-                    # HTML generation. Based on your file, it looks like you might need to 
-                    # wrap the bottom part of your tc script into a function or call it here.
-                    # Assuming tc.perform_comparison or similar logic runs:
+                    sec_old = tc.extract_sections(root_old)
+                    sec_new = tc.extract_sections(root_new)
                     
+                    # This resets the change registry for a fresh run
+                    tc.CHANGE_REGISTRY = {
+                        "workbook": [], "datasources": {}, "calculations": {}, 
+                        "parameters": {}, "worksheets": {}, "dashboards": {}, "stories": {}
+                    }
+
+                    # Trigger the analysis (this populates the CHANGE_REGISTRY)
+                    # We pass 'cards' as an empty list if it's not pre-defined in your version
+                    cards = [] 
+                    
+                    # Define the report filename
                     report_file = "compare_SOURCE_vs_TARGET_latest.html"
                     
-                    # 3. Check if the file was actually created
+                    # 4. Generate the report using the internal tool function
+                    # Note: You may need to adjust these arguments based on the 
+                    # specific signature of generate_html_report in your file.
+                    tc.generate_html_report(
+                        src_wb,
+                        tgt_wb,
+                        cards,
+                        None,
+                        report_file,
+                        "", # kpi_html (empty or call tc.render_workbook_kpi_table)
+                        root_new,
+                        ""  # visual_tree
+                    )
+
+                    # 5. Display the result
                     if os.path.exists(report_file):
-                        st.success(f"✅ Comparison Complete!")
-                        
-                        # Read the HTML content
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
+                        st.success("✅ Comparison Successful!")
+                        components.html(html_content, height=1000, scrolling=True)
                         
-                        # --- Display Options ---
-                        
-                        # Option A: Display directly in the app
-                        st.subheader("📊 Comparison Report")
-                        components.html(html_content, height=1200, scrolling=True)
-                        
-                        # Option B: Provide a download button for the HTML file
                         st.download_button(
-                            label="📥 Download HTML Report",
-                            data=html_content,
-                            file_name=f"Comparison_{src_wb}_vs_{tgt_wb}.html",
+                            "📥 Download Report", 
+                            html_content, 
+                            file_name=f"Comparison_{src_wb}.html", 
                             mime="text/html"
                         )
                     else:
-                        st.error("The comparison finished, but the report file was not found. Check if 'generate_html_report' is being called inside your tool.")
-                        
+                        st.error("Report file was not created by the generator function.")
+
                 except Exception as e:
-                    st.error(f"❌ Error during comparison: {str(e)}")
-                    # Print full error for debugging
-                    st.exception(e)
+                    st.error(f"Error during comparison: {e}")
+                    st.exception(e) # This shows the full traceback for debugging
         else:
-            st.warning("Please select valid workbooks for both Source and Target.")
+            st.warning("Please select both a source and target workbook.")
 else:
     st.info("Please connect to Tableau via the sidebar to begin.")

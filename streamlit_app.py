@@ -142,9 +142,10 @@ if 'tableau_token' in st.session_state:
         tgt_wb = st.selectbox("Select Workbook", sorted(tgt_wb_list) if tgt_wb_list else ["No workbooks found"], key="tgt_w_sel")
 
     # --- 3. Comparison Execution ---
+    # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
         if src_wb and tgt_wb:
-            with st.spinner("🕵️ Running deep datasource and permission analysis..."):
+            with st.spinner("🕵️ Running deep analysis and generating summary..."):
                 try:
                     tc.TABLEAU_SITE_URL = srv
                     report_file = "compare_SOURCE_vs_TARGET_latest.html"
@@ -156,7 +157,7 @@ if 'tableau_token' in st.session_state:
                     root_old = tc.parse_twb(src_data['twb_path'])
                     root_new = tc.parse_twb(tgt_data['twb_path'])
 
-                    # 2. Extract Sections (Standard)
+                    # 2. Extract Sections
                     sec_old = tc.extract_sections(root_old)
                     sec_new = tc.extract_sections(root_new)
                     
@@ -170,48 +171,52 @@ if 'tableau_token' in st.session_state:
                     cards = tc.build_cards(sec_old, sec_new)
                     tc.populate_change_registry_from_cards(cards)
 
-                    # 5. 🔥 THE MISSING PIECE: Datasource Comparison Loop
-                    # This replicates the logic in your VS Code main() function
+                    # 5. 🔥 ADDED: OVERALL WORKBOOK SUMMARY
+                    # This generates the "📘 Overall Workbook Differences Summary" card
+                    overall_summary_card = tc.build_overall_workbook_summary_card(
+                        sec_old, sec_new, cards, root_old, root_new
+                    )
+                    if overall_summary_card:
+                        cards.insert(0, overall_summary_card)
+
+                    # 6. 🔥 ADDED: GLOBAL ACTIONS CARD
+                    # This catches workbook-level actions (Filter/Highlight/URL)
+                    global_action_card = tc.build_global_action_card(root_old, root_new)
+                    if global_action_card:
+                        cards.insert(0, global_action_card)
+
+                    # 7. Datasource Comparison Loop (From previous step)
                     old_ds_raw = tc.extract_datasources_raw(src_data['twb_path'])
                     new_ds_raw = tc.extract_datasources_raw(tgt_data['twb_path'])
-
                     for ds_name in set(old_ds_raw) | set(new_ds_raw):
-                        tc.compare(
-                            ds_name,
-                            old_ds_raw.get(ds_name),
-                            new_ds_raw.get(ds_name),
-                            sid,
-                            token
-                        )
+                        tc.compare(ds_name, old_ds_raw.get(ds_name), new_ds_raw.get(ds_name), sid, token)
 
-                    # 6. Metadata: Permissions & Owners
+                    # 8. Metadata & Permissions
                     src_owner = tc.get_workbook_owner(token, sid, src_data.get('workbook_id'))
                     tgt_owner = tc.get_workbook_owner(token, sid, tgt_data.get('workbook_id'))
                     src_perms = tc.get_users_and_permissions_for_workbook(token, sid, src_proj, src_wb)
                     tgt_perms = tc.get_users_and_permissions_for_workbook(token, sid, tgt_proj, tgt_wb)
 
-                    # 7. Prep HTML Components
+                    # 9. Prep HTML Components
                     kpi_html = tc.render_workbook_kpi_table(
                         tc.build_workbook_kpi_snapshot(sec_old),
                         tc.build_workbook_kpi_snapshot(sec_new)
                     )
-                    
                     visual_tree = tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb)
-                    
                     perm_html = (
                         tc.build_users_permissions_card_with_context(src_proj, src_wb, src_perms, "source")
                         + "<hr/>" +
                         tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_perms, "Target")
                     )
 
-                    # 8. Generate Report (Matches your 15-argument signature)
+                    # 10. Generate Report
                     tc.generate_html_report(
                         src_wb, tgt_wb, cards, None, report_file, kpi_html, root_new,
                         visual_tree, tgt_owner, "Latest", datetime.now().strftime("%Y-%m-%d"),
                         src_owner, tgt_owner, perm_html, ""
                     )
 
-                    # 9. Render Result
+                    # 11. Render Result
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()

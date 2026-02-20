@@ -143,70 +143,77 @@ if 'tableau_token' in st.session_state:
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
         if src_wb and tgt_wb and src_wb != "No workbooks found":
-            with st.spinner("Analyzing differences..."):
+            with st.spinner("🔍 Analyzing Tableau XML Structure..."):
                 try:
-                    # 1. Sync the global URL variable in the tool
+                    # 1. Setup Environment
                     tc.TABLEAU_SITE_URL = srv
+                    report_file = "compare_SOURCE_vs_TARGET_latest.html"
                     
-                    # 2. Download the data for both workbooks
-                    st.write("📥 Downloading workbooks...")
+                    # 2. Download & Parse
                     src_data = tc.download_latest_workbook_revision(token, sid, src_proj, src_wb)
                     tgt_data = tc.download_latest_workbook_revision(token, sid, tgt_proj, tgt_wb)
-
-                    # 3. Parse and run the comparison logic
-                    # We need to extract sections and generate the report manually
-                    # because tc.main() relies on command line arguments
+                    
                     root_old = tc.parse_twb(src_data['twb_path'])
                     root_new = tc.parse_twb(tgt_data['twb_path'])
                     
+                    # 3. Extract Sections (The Data Prep)
                     sec_old = tc.extract_sections(root_old)
                     sec_new = tc.extract_sections(root_new)
                     
-                    # This resets the change registry for a fresh run
+                    # 4. Run the Comparison Logic (The "Brain")
+                    # This builds the actual content for the HTML
+                    cards = tc.build_cards(sec_old, sec_new)
+                    
+                    # Reset and populate the registry
                     tc.CHANGE_REGISTRY = {
                         "workbook": [], "datasources": {}, "calculations": {}, 
                         "parameters": {}, "worksheets": {}, "dashboards": {}, "stories": {}
                     }
+                    tc.populate_change_registry_from_cards(cards)
+                    
+                    # Add the Overall Summary Card
+                    overall_summary = tc.build_overall_workbook_summary_card(
+                        sec_old, sec_new, cards, root_old, root_new
+                    )
+                    if overall_summary:
+                        cards.insert(0, overall_summary)
 
-                    # Trigger the analysis (this populates the CHANGE_REGISTRY)
-                    # We pass 'cards' as an empty list if it's not pre-defined in your version
-                    cards = [] 
+                    # 5. Generate Secondary Assets (KPIs & Tree)
+                    kpi_old = tc.build_workbook_kpi_snapshot(sec_old)
+                    kpi_new = tc.build_workbook_kpi_snapshot(sec_new)
+                    kpi_html = tc.render_workbook_kpi_table(kpi_old, kpi_new)
                     
-                    # Define the report filename
-                    report_file = "compare_SOURCE_vs_TARGET_latest.html"
-                    
-                    # 4. Generate the report using the internal tool function
-                    # Note: You may need to adjust these arguments based on the 
-                    # specific signature of generate_html_report in your file.
-                    tc.generate_html_report(
-                        src_wb,
-                        tgt_wb,
-                        cards,
-                        None,
-                        report_file,
-                        "", # kpi_html (empty or call tc.render_workbook_kpi_table)
-                        root_new,
-                        ""  # visual_tree
+                    visual_tree_text = tc.render_visual_change_tree(
+                        sec_new, tc.CHANGE_REGISTRY, tgt_wb
                     )
 
-                    # 5. Display the result
+                    # 6. Final Report Generation
+                    # We pass all the computed variables so the HTML isn't empty
+                    tc.generate_html_report(
+                        f"{src_wb} (Source)",
+                        f"{tgt_wb} (Target)",
+                        cards,
+                        None, # GPT summary (can be added if you have OpenAI key set)
+                        report_file,
+                        kpi_html,
+                        root_new,
+                        visual_tree_text
+                    )
+
+                    # 7. Render in UI
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
-                        st.success("✅ Comparison Successful!")
-                        components.html(html_content, height=1000, scrolling=True)
                         
-                        st.download_button(
-                            "📥 Download Report", 
-                            html_content, 
-                            file_name=f"Comparison_{src_wb}.html", 
-                            mime="text/html"
-                        )
-                    else:
-                        st.error("Report file was not created by the generator function.")
-
+                        st.success("✅ Analysis Complete!")
+                        # Use a large height to avoid double scrollbars
+                        components.html(html_content, height=1200, scrolling=True)
+                        
+                        st.download_button("📥 Download Full Report", html_content, 
+                                         file_name=f"Tableau_Diff_{tgt_wb}.html", mime="text/html")
+                
                 except Exception as e:
-                    st.error(f"Error during comparison: {e}")
+                    st.error(f"Analysis failed: {e}")
                     st.exception(e) # This shows the full traceback for debugging
         else:
             st.warning("Please select both a source and target workbook.")

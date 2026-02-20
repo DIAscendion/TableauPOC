@@ -707,6 +707,9 @@ def parse_twb(path):
         return None
     
 # ---------------- VISUAL CHANGE REGISTRY ----------------
+# This list holds the final HTML blocks for the bottom Datasource section
+DATASOURCE_CARDS = []
+
 CHANGE_REGISTRY = {
     "workbook": [],
     "datasources": {},
@@ -718,7 +721,11 @@ CHANGE_REGISTRY = {
     "layout_only": []   # 🆕 cosmetic-only changes
 }
 
-
+GLOBAL_FIELD_IMPACTS = {
+    "joins": set(), "relationships": set(), "groups": set(),
+    "sets": set(), "bins": set(), "lods": set(),
+    "renamed_fields": set(), "hierarchies": set(),
+}
 
 def simplify_visual_bullet(b):
     if "Datasource filter added" in b:

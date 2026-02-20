@@ -144,43 +144,59 @@ if 'tableau_token' in st.session_state:
     # --- 3. Comparison Execution ---
     if st.button("🚀 Run Comparison", use_container_width=True, type="primary"):
         if src_wb and tgt_wb:
-            with st.spinner("🕵️ Extracting Datasources and Metadata..."):
+            with st.spinner("🕵️ Running deep datasource and permission analysis..."):
                 try:
                     tc.TABLEAU_SITE_URL = srv
                     report_file = "compare_SOURCE_vs_TARGET_latest.html"
                     
-                    # 1. Download & Parse
+                    # 1. Download Workbooks
                     src_data = tc.download_latest_workbook_revision(token, sid, src_proj, src_wb)
                     tgt_data = tc.download_latest_workbook_revision(token, sid, tgt_proj, tgt_wb)
+                    
                     root_old = tc.parse_twb(src_data['twb_path'])
                     root_new = tc.parse_twb(tgt_data['twb_path'])
 
-                    # 2. Extract Sections
+                    # 2. Extract Sections (Standard)
                     sec_old = tc.extract_sections(root_old)
                     sec_new = tc.extract_sections(root_new)
                     
-                    # 3. CRITICAL: Reset Global Datasource Cards
-                    # Your tool uses this list to render the bottom section of the HTML
-                    tc.DATASOURCE_CARDS = [] 
+                    # 3. Reset Registry
                     tc.CHANGE_REGISTRY = {
                         "workbook": [], "datasources": {}, "calculations": {}, 
                         "parameters": {}, "worksheets": {}, "dashboards": {}, "stories": {}
                     }
 
-                    # 4. Build standard cards (This triggers tc.summarize_datasources internally)
+                    # 4. Build Standard Cards (Worksheets/Dashboards)
                     cards = tc.build_cards(sec_old, sec_new)
-                    
-                    # 5. FETCH PERMISSIONS & OWNERS
+                    tc.populate_change_registry_from_cards(cards)
+
+                    # 5. 🔥 THE MISSING PIECE: Datasource Comparison Loop
+                    # This replicates the logic in your VS Code main() function
+                    old_ds_raw = tc.extract_datasources_raw(src_data['twb_path'])
+                    new_ds_raw = tc.extract_datasources_raw(tgt_data['twb_path'])
+
+                    for ds_name in set(old_ds_raw) | set(new_ds_raw):
+                        tc.compare(
+                            ds_name,
+                            old_ds_raw.get(ds_name),
+                            new_ds_raw.get(ds_name),
+                            sid,
+                            token
+                        )
+
+                    # 6. Metadata: Permissions & Owners
                     src_owner = tc.get_workbook_owner(token, sid, src_data.get('workbook_id'))
                     tgt_owner = tc.get_workbook_owner(token, sid, tgt_data.get('workbook_id'))
                     src_perms = tc.get_users_and_permissions_for_workbook(token, sid, src_proj, src_wb)
                     tgt_perms = tc.get_users_and_permissions_for_workbook(token, sid, tgt_proj, tgt_wb)
 
-                    # 6. Prep HTML Components
+                    # 7. Prep HTML Components
                     kpi_html = tc.render_workbook_kpi_table(
                         tc.build_workbook_kpi_snapshot(sec_old),
                         tc.build_workbook_kpi_snapshot(sec_new)
                     )
+                    
+                    visual_tree = tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb)
                     
                     perm_html = (
                         tc.build_users_permissions_card_with_context(src_proj, src_wb, src_perms, "source")
@@ -188,25 +204,24 @@ if 'tableau_token' in st.session_state:
                         tc.build_users_permissions_card_with_context(tgt_proj, tgt_wb, tgt_perms, "Target")
                     )
 
-                    # 7. Generate Full Report (Exactly 15 Arguments)
+                    # 8. Generate Report (Matches your 15-argument signature)
                     tc.generate_html_report(
                         src_wb, tgt_wb, cards, None, report_file, kpi_html, root_new,
-                        tc.render_visual_change_tree(sec_new, tc.CHANGE_REGISTRY, tgt_wb),
-                        tgt_owner, "Latest", datetime.now().strftime("%Y-%m-%d"),
+                        visual_tree, tgt_owner, "Latest", datetime.now().strftime("%Y-%m-%d"),
                         src_owner, tgt_owner, perm_html, ""
                     )
 
-                    # 8. Show Result
+                    # 9. Render Result
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
-                        st.success("✅ Full Report Generated!")
+                        st.success("✅ Comparison matching VS Code output!")
                         components.html(html_content, height=1200, scrolling=True)
                         st.download_button("📥 Download Report", html_content, 
                                          file_name=f"Full_Report_{tgt_wb}.html", mime="text/html")
-                
+
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Analysis Error: {e}")
                     st.exception(e)
         else:
             st.warning("Please select both a source and target workbook.")

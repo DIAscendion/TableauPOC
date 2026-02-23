@@ -1867,7 +1867,10 @@ def compare(name, old_xml, new_xml, site_id, token):
 
 
 def summarize_datasources(ds_name, old_xml, new_xml):
-
+    """
+    Summarizes datasource metadata and compares filters for the UI.
+    """
+    # Use new_xml for current metadata info, fallback to old
     xml = new_xml or old_xml
 
     try:
@@ -1875,37 +1878,64 @@ def summarize_datasources(ds_name, old_xml, new_xml):
     except Exception:
         root = None
 
-    # existing classification
+    # --- PART A: METADATA & CONNECTION ---
     if root is not None and has_repository_location(root):
         info = classify_published_datasource(ds_name)
     else:
         info = classify_datasource(xml)
-
         if all(isinstance(v, str) and v.startswith("Not exposed") for v in info.values()):
             info = infer_datasource_from_name(ds_name)
 
-    # 🔥 ADD THIS BLOCK
     connection_class = get_connection_class(xml)
-
     if connection_class and connection_class != "Unknown":
         info["connection"] = connection_class.replace("-", " ").title()
 
-    bullets = [
+    meta_bullets = [
         f"Source: {info['source']}",
         f"Datasource Type: {info['datasource_type']}",
-        f"Connection: {info['connection']}",   # ← THIS WILL NOW SHOW CORRECT VALUE
+        f"Connection: {info['connection']}",
         f"Mode: {info['mode']}",
         f"Location: {info['location']}",
     ]
 
+    # Register Metadata Card
     register_change(
         level="datasource",
         parent=ds_name,
         title="Datasource Summary",
         status="info",
-        bullets=bullets
+        bullets=meta_bullets
     )
 
+    # --- PART B: FILTER COMPARISON ---
+    # Use your new robust function to extract filters from both versions
+    old_filters = extract_all_filters_deterministically(old_xml)
+    new_filters = extract_all_filters_deterministically(new_xml)
+
+    filter_bullets = []
+    added = new_filters - old_filters
+    removed = old_filters - new_filters
+    unchanged = new_filters & old_filters
+
+    if added:
+        filter_bullets.append(f"➕ **Added Filters:** {', '.join(sorted(added))}")
+    if removed:
+        filter_bullets.append(f"➖ **Removed Filters:** {', '.join(sorted(removed))}")
+    
+    # Show unchanged filters as info
+    if unchanged:
+        filter_bullets.append(f"ℹ️ **Unchanged Filters:** {', '.join(sorted(unchanged))}")
+    elif not added and not removed and not unchanged:
+        filter_bullets.append("ℹ️ *No datasource-level filters detected.*")
+
+    # Register Filter Card (This creates the second blue sub-card in the UI)
+    register_change(
+        level="datasource",
+        parent=ds_name,
+        title="Datasource Filters",
+        status="modified" if (added or removed) else "info",
+        bullets=filter_bullets
+    )
 
 
 
@@ -4264,6 +4294,7 @@ def render_cards(cards, force_open=True, skip_empty=True):
 def render_datasource_cards():
     blocks = []
 
+    # Iterate through all datasources registered in CHANGE_REGISTRY
     for ds_name, changes in CHANGE_REGISTRY.get("datasources", {}).items():
         if not changes:
             continue
@@ -4273,6 +4304,7 @@ def render_datasource_cards():
         for c in changes:
             status = c.get("status", "info").lower()
 
+            # Determine icon based on status
             icon = {
                 "modified": "🟨",
                 "added": "➕",
@@ -4280,20 +4312,21 @@ def render_datasource_cards():
             }.get(status, "ℹ️")
 
             bullets = c.get("bullets") or []
-
-            bullets_html = "".join([f"<li>{html.escape(str(b))}</li>" for b in c.get("bullets", [])])
+            bullets_html = "".join([f"<li>{html.escape(str(b))}</li>" for b in bullets])
             
+            # Sub-card (e.g., "Datasource Summary" or "Datasource Filters")
             cards_html.append(f"""
-            <details class="panel" style="background:#F2F7FF; border-radius:12px; padding:8px 12px; margin:10px 0;">
-              <summary style="cursor:pointer; font-weight:600; color:#1f6fe5;">
-                {html.escape(c.get('title','Connection Details'))}
+            <details class="panel" style="background:#F2F7FF; border-radius:12px; padding:8px 12px; margin:10px 0; border-left: 4px solid {'#ffca28' if status=='modified' else '#1f6fe5'};">
+              <summary style="cursor:pointer; font-weight:600; color:#1f6fe5; list-style:none;">
+                {icon} {html.escape(c.get('title','Details'))}
               </summary>
               <div style="margin-top:10px;">
-                <ul>{bullets_html}</ul>
+                <ul style="margin-left:-15px;">{bullets_html}</ul>
               </div>
             </details>
             """)
 
+        # Main Datasource Container
         blocks.append(f"""
         <details class="panel" style="
             background:#EAF3FF;
@@ -4309,7 +4342,7 @@ def render_datasource_cards():
               color:#1f6fe5;
               list-style:none;
           ">
-            🗄 Datasource Details — {html.escape(ds_name)}
+            🗄 Datasource: {html.escape(ds_name)}
           </summary>
 
           <div style="margin-top:12px;">
@@ -4319,7 +4352,6 @@ def render_datasource_cards():
         """)
 
     return "\n".join(blocks)
-
 
 
 def map_capabilities_for_display(raw_caps: str, site_role: str) -> str:

@@ -220,7 +220,7 @@ if 'tableau_token' in st.session_state:
                     if os.path.exists(report_file):
                         with open(report_file, 'r', encoding='utf-8') as f:
                             html_content = f.read()
-                        st.success("✅ Comparison matching VS Code output!")
+                        st.success("✅ Comparison output generated!")
                         components.html(html_content, height=1200, scrolling=True)
                         st.download_button("📥 Download Report", html_content, 
                                          file_name=f"Full_Report_{tgt_wb}.html", mime="text/html")

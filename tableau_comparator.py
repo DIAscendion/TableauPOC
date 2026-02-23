@@ -16,7 +16,6 @@ Changes vs v3.1:
   • Deep XML heuristics for control types, actions, legends, stories/story points.
 
 """
-
 import os, re, html, zipfile, tempfile, webbrowser, requests, urllib3, pathlib, httpx, io
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -27,6 +26,8 @@ from lxml import etree
 # from test_data import compare as datasource_compare
 # from test_data import CHANGE_REGISTRY as DS_CHANGE_REGISTRY
 # from test_data import extract_datasources_raw
+
+
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 VERIFY_SSL = False
@@ -250,6 +251,7 @@ def get_latest_revision_number(token, site_id, workbook_id):
 
     latest = max(revisions, key=lambda r: int(r["number"]))
     return latest["number"], latest
+
 
 def get_project_permissions(token, site_id, project_id):
     url = f"{TABLEAU_SITE_URL}/api/3.21/sites/{site_id}/projects/{project_id}/permissions"
@@ -707,9 +709,6 @@ def parse_twb(path):
         return None
     
 # ---------------- VISUAL CHANGE REGISTRY ----------------
-# This list holds the final HTML blocks for the bottom Datasource section
-DATASOURCE_CARDS = []
-
 CHANGE_REGISTRY = {
     "workbook": [],
     "datasources": {},
@@ -721,11 +720,7 @@ CHANGE_REGISTRY = {
     "layout_only": []   # 🆕 cosmetic-only changes
 }
 
-GLOBAL_FIELD_IMPACTS = {
-    "joins": set(), "relationships": set(), "groups": set(),
-    "sets": set(), "bins": set(), "lods": set(),
-    "renamed_fields": set(), "hierarchies": set(),
-}
+
 
 def simplify_visual_bullet(b):
     if "Datasource filter added" in b:
@@ -1334,21 +1329,19 @@ def resolve_datasource_name(ds_xml: str) -> str:
     return "Datasource"
 
 
-
 def classify_datasource(ds_xml: str) -> dict:
     """
-    Tableau-accurate datasource classification
+    Enhanced Tableau-accurate datasource classification
     """
     info = {
-        "source": "Not exposed by Tableau",
-        "datasource_type": "Not exposed by Tableau",
-        "connection": "Not exposed by Tableau",
-        "mode": "Not exposed by Tableau",
-        "location": "Not exposed by Tableau"
+        "source": "Embedded",
+        "datasource_type": "Unknown",
+        "connection": "Unknown",
+        "mode": "Live",
+        "location": "Local/Embedded"
     }
 
-    if not ds_xml:
-        return info
+    if not ds_xml: return info
 
     try:
         root = etree.fromstring(ds_xml.encode("utf-8"))
@@ -1357,69 +1350,46 @@ def classify_datasource(ds_xml: str) -> dict:
 
     conn = root.find(".//connection")
 
-    # -------------------------------------------------
-    # 1️⃣ Published datasource (Tableau hides details)
-    # -------------------------------------------------
-    if root.find(".//repository-location") is not None:
+    # 1️⃣ Published Datasource (Check for Repository Location)
+    repo = root.find(".//repository-location")
+    if repo is not None:
         info.update({
-            "source": "Published Datasource",
-            "datasource_type": "Published",
-            "connection": "Managed by Tableau",
-            "mode": "Managed by Tableau",
-            "location": "Tableau Server / Cloud"
+            "source": "Published",
+            "datasource_type": "Tableau Server",
+            "connection": "Managed",
+            "mode": "Published",
+            "location": f"Site: {repo.get('site', 'Default')} | Path: {repo.get('path', '')}"
         })
         return info
 
-    # -------------------------------------------------
-    # 2️⃣ Extract-based datasources
-    # -------------------------------------------------
+    # 2️⃣ Extract specific details from Connection tag
     if conn is not None:
         cls = (conn.get("class") or "").lower()
+        server = conn.get("server") or ""
+        dbname = conn.get("dbname") or ""
         filename = (conn.get("filename") or "").lower()
 
-        # ---- CSV / TEXT FILE ----
-        if cls in ("textscan", "csv") or filename.endswith((".csv", ".txt")):
-            info.update({
-                "source": "Uploaded File",
-                "datasource_type": "Text File",
-                "connection": "CSV / Text",
-                "mode": "Extract",
-                "location": "Embedded (Tableau Extract)"
-            })
-            return info
+        # Update Connection Type
+        info["connection"] = cls.replace("-", " ").title()
 
-        # ---- EXCEL ----
-        if cls in ("excel-direct", "excel") or filename.endswith((".xls", ".xlsx")):
-            info.update({
-                "source": "Uploaded File",
-                "datasource_type": "Excel",
-                "connection": "Excel",
-                "mode": "Extract",
-                "location": "Embedded (Tableau Extract)"
-            })
-            return info
-
-        # ---- SNOWFLAKE ----
+        # Snowflake Detail
         if "snowflake" in cls:
             info.update({
                 "source": "Snowflake",
                 "datasource_type": "Database",
-                "connection": "Snowflake",
-                "mode": "Live",
-                "location": "External (Snowflake)"
+                "location": f"Server: {server} | DB: {dbname}"
             })
-            return info
-
-        # ---- GENERIC EXTRACT ----
-        if cls == "hyper":
+        # Excel/CSV Detail
+        elif "excel" in cls or "textscan" in cls or filename.endswith((".csv", ".xlsx", ".xls")):
             info.update({
-                "source": "Extract",
-                "datasource_type": "Extract",
-                "connection": "Hyper",
+                "source": "Uploaded File",
+                "datasource_type": "File",
                 "mode": "Extract",
-                "location": "Embedded (Tableau Extract)"
+                "location": filename if filename else "Embedded in Workbook"
             })
-            return info
+        # Generic Hyper
+        elif cls == "hyper":
+            info.update({"source": "Extract", "connection": "Hyper", "mode": "Extract"})
 
     return info
 
@@ -1857,6 +1827,8 @@ def compare(name, old_xml, new_xml, site_id, token):
         old_conn = new_conn
 
     # DIFFERENCE
+    old_info = classify_datasource(old_xml)
+    new_info = classify_datasource(new_xml)
     added = sorted(new_items - old_items)
     removed = sorted(old_items - new_items)
     common = sorted(new_items & old_items)
@@ -1880,6 +1852,15 @@ def compare(name, old_xml, new_xml, site_id, token):
     if old_mode != new_mode:
         status = "modified"
         bullets.append(f"⚡ Mode: {old_mode} → {new_mode}")
+
+    # This addresses your request to show if location changed
+    if old_info["location"] != new_info["location"]:
+        bullets.append(f"📍 **Location Change:** {old_info['location']} ➡️ {new_info['location']}")
+    else:
+        bullets.append(f"📍 **Location:** {new_info['location']}")
+
+    if old_info["connection"] != new_info["connection"]:
+        bullets.append(f"🔌 **Connection Type:** {old_info['connection']} ➡️ {new_info['connection']}")
 
     # CONNECTION CHANGE
     if old_conn != new_conn:
@@ -1907,12 +1888,10 @@ def compare(name, old_xml, new_xml, site_id, token):
 
     # SAVE
     CHANGE_REGISTRY["datasources"].setdefault(name, []).append({
-
-        "status": status,
-        "title": "Datasource Filters",
-        "object": "__datasource_filters__",
+        "status": "modified" if old_info != new_info else "info",
+        "title": "Datasource Metadata & Connection",
+        "object": "__metadata__",
         "bullets": bullets
-
     })
 
 
@@ -4331,32 +4310,15 @@ def render_datasource_cards():
 
             bullets = c.get("bullets") or []
 
-            bullets_html = ""
-            for b in bullets:
-                bullets_html += f"<li>{html.escape(str(b))}</li>"
-
+            bullets_html = "".join([f"<li>{html.escape(str(b))}</li>" for b in c.get("bullets", [])])
+            
             cards_html.append(f"""
-            <details class="panel" style="
-                background:#F2F7FF;
-                border-radius:12px;
-                padding:8px 12px;
-                margin:10px 0;
-                box-shadow:0 2px 6px rgba(0,0,0,0.06);
-            ">
-              <summary style="
-                  cursor:pointer;
-                  font-size:15px;
-                  font-weight:600;
-                  color:#1f6fe5;
-                  list-style:none;
-              ">
-                {icon} {html.escape(c.get('title','Datasource Change'))}
+            <details class="panel" style="background:#F2F7FF; border-radius:12px; padding:8px 12px; margin:10px 0;">
+              <summary style="cursor:pointer; font-weight:600; color:#1f6fe5;">
+                {html.escape(c.get('title','Connection Details'))}
               </summary>
-
               <div style="margin-top:10px;">
-                <ul>
-                  {bullets_html or "<li><em>No structural change detected.</em></li>"}
-                </ul>
+                <ul>{bullets_html}</ul>
               </div>
             </details>
             """)

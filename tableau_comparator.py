@@ -1524,87 +1524,58 @@ def is_internal_calc(name):
 
 def extract_all_filters_deterministically(xml_text):
     """
-    Extract ONLY datasource filters.
-    Excludes worksheet filters, action filters, tooltip fields, etc.
+    Robustly finds filters in <datasource>, <extract>, and <connection>.
+    Includes RLS calculations used as filters (hidden in expression attributes).
     """
-
     filters = set()
-
     if not xml_text:
         return filters
-
-    def clean_name(val):
-
-        if not val:
-            return None
-
-        val = val.replace("[", "").replace("]", "").strip()
-
-        if val.lower().startswith("extract."):
-            val = val.split(".", 1)[1]
-
-        if "." in val:
-            val = val.split(".")[-1]
-
-        return val.strip()
-
+ 
     clean_xml = clean_xml_for_parsing(xml_text)
-
+   
     try:
-
         root = ET.fromstring(clean_xml)
-
-        # --------------------------------------------------
-        # ONLY scan datasource node
-        # --------------------------------------------------
-        for datasource in root.findall(".//datasource"):
-
-            # Direct datasource filters
-            for f in datasource.findall(".//filter"):
-
-                col = f.get("column") or f.get("field")
-
+       
+        def clean_name(val):
+            if not val: return None
+            return val.replace("[", "").replace("]", "").strip()
+ 
+        # SCAN: Direct <filter> tags
+        for f in root.findall(".//filter"):
+            if f.get("generated-type") == "action":
+                continue
+           
+            # Case 1: Column attribute
+            col = f.get("column") or f.get("field")
+            if col:
                 name = clean_name(col)
-
                 if name and not is_internal_calc(name):
                     filters.add(name)
-
-            # Extract filters
-            for extract in datasource.findall(".//extract"):
-
-                for f in extract.findall(".//filter"):
-
-                    col = f.get("column") or f.get("field")
-
-                    name = clean_name(col)
-
-                    if name and not is_internal_calc(name):
-                        filters.add(name)
-
-            # Relation filters
-            for relation in datasource.findall(".//relation"):
-
-                expr = relation.get("expression")
-
-                if expr:
-
-                    matches = re.findall(
-                        r'\[([^\]]+)\]',
-                        expr
-                    )
-
-                    for m in matches:
-
-                        name = clean_name(m)
-
-                        if name and not is_internal_calc(name):
-                            filters.add(name)
-
-    except Exception:
-        pass
-
+           
+            # Case 2: Group filters
+            for gf in f.findall(".//groupfilter"):
+                gf_col = gf.get("column") or gf.get("field")
+                name = clean_name(gf_col)
+                if name and not is_internal_calc(name):
+                    filters.add(name)
+           
+            # Case 3: Calculation Expressions (RLS)
+            expr = f.get("expression")
+            if expr:
+                # Extract [Name] from expression like '[UserFilter] = 1'
+                matches = re.findall(r'\[([^\]]+)\]', expr)
+                for m in matches:
+                    if not is_internal_calc(m):
+                        filters.add(m)
+ 
+    except ET.ParseError:
+        # Fallback to Regex
+        matches = re.findall(r'<filter [^>]*column=[\'"]\[?([^\]"\']+)\]?[\'"]', clean_xml)
+        for m in matches:
+            if not is_internal_calc(m):
+                filters.add(m)
+ 
     return filters
-
 
 def extract_user_defined_ds_calcs(xml_text):
     """
